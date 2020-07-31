@@ -131,7 +131,13 @@ M.const = {
   
 }
 
-
+local function merge_table(dst,src,overwrite)
+  for i,v in pairs(src) do
+     if dst[i]==nil or overwrite then 
+       dst[i]=v
+     end
+  end
+end
 --- convert integer to HEX representation
 -- @param IN the number to convert to hex
 -- @param len the size to return, any result smaller will be prefixed by "0"s
@@ -445,12 +451,66 @@ M.parse = function(target)
       cnt = cnt + 1
     end
   end
+  
   -- resolve imported DLL names
   for i, dll in ipairs(out.DataDirectory.ImportTable) do
     f:seek("set", out:get_fileoffset(dll.NameRVA))
     dll.Name = readstring(f)
   end
   
+  local expnames={}
+  
+  if M.ToDec(out.DataDirectory.ExportTable.VirtualAddress)>0 then 
+    
+    f:seek("set", out:get_fileoffset(out.DataDirectory.ExportTable.VirtualAddress))
+   
+    local expt = get_list({
+            { size = 4,
+              name = "ExportFlags"},
+            { size = 4,
+              name = "TimeDateStamp"},
+            { size = 2,
+              name = "MajorVersion"},
+            { size = 2,
+              name = "MinorVersion"},
+            { size = 4,
+              name = "NameRVA"},
+             { size = 4,
+              name = "OrdinalBase"},
+              { size = 4,
+              name = "NumOfAddressTable"},
+             { size = 4,
+              name = "NumOfNamePointers"},
+            { size = 4,
+              name = "ExportAddressTableRVA"},           
+             { size = 4,
+              name = "NamePointersRVA"},
+             { size = 4,
+              name = "OrdinalTableRVA"},
+          }, f)
+     
+    merge_table(out.DataDirectory.ExportTable,expt)
+    
+    f:seek("set", out:get_fileoffset(expt.NamePointersRVA))
+    local nameRVAs={}
+    
+    for i=1, M.toDec(expt.NumOfNamePointers) do
+        local ent=get_list({
+            {size=4,name="NameRVA"}
+            },f)
+        nameRVAs[#nameRVAs+1]=ent.NameRVA
+    end
+    for _,rva in pairs(nameRVAs) do
+      local offset=out:get_fileoffset(rva)
+      if offset and offset>2 then
+        f:seek("set", offset)
+        expnames[#expnames+1]=readstring(f)
+      else
+        print('wrong rva offset - ',offset,rva)
+      end
+    end    
+  end
+  out.DataDirectory.ExportTable.Names=expnames
   f:close()
   return out
 end
@@ -505,6 +565,10 @@ M.dump = function(obj)
   print("Imports:")
   for i, dll in ipairs(obj.DataDirectory.ImportTable) do
     print("   "..dll.Name)
+  end
+  print('Exports:')
+  for _, name in ipairs(obj.DataDirectory.ExportTable.Names) do
+    print("   "..name)
   end
 end
 
